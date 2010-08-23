@@ -47,7 +47,7 @@ using namespace vw::photometry;
 #define ExtendedArea ((horExtendedSize)*(verExtendedSize))
 #define AugmentedBlockArea (ExtendedArea - 1) //size of row side of the intermediate jacobian and size of intermediate error vector
 #define temp 0 //temporary starting place to speed up files if necessary
-#define UNIQUE "oldcode_olddem_nostage3"
+#define UNIQUE "oldcode_olddem_nostage2or3_jacobcopyfix"
 #define writefiles 1 // 0 = no, 1 = yes
 
 enum LossType { GAUSSIAN, CAUCHY, EXPONENTIAL };
@@ -78,21 +78,24 @@ Vector3 ComputeNormalDerivative(int flag,  Vector3 xyz, Vector3 xyzTOP, Vector3 
   // d_n/xl2 = (xt1-xo1,xo0-xt0,0)
   // d_n/xt2 = (xo1-xl1,xl0-xo0,0)
 
+  // according to the document, i is row, j is column.  this means that
+  // left is i,j-1 and top is i-1,j
+  // this definition is now consistent with the (updated) document
   Vector3 normalDerivative;
   if (flag == 0){ //wrt z_{i,j} //Current
     normalDerivative(0) = xyzLEFT(1) - xyzTOP(1); //dn_x/dz_{ij}
     normalDerivative(1) = xyzTOP(0) - xyzLEFT(0); //dn_y/dz_{ij}
     normalDerivative(2) = 0; //dnz_dz_{ij}
   }
-  if (flag == 1){ //wrt z_{i-1,j} //LEFT
-    normalDerivative(0) = xyzTOP(1) - xyz(1); //dn_x/dz_{i-1, j}
-    normalDerivative(1) = xyz(0) - xyzTOP(0); //dn_y/dz_{i-1,j}
-    normalDerivative(2) = 0; //dnz_dz_{i-1,j}
-  }
-  if (flag == 2){ //wrt z_{i,j-1} //TOP
-    normalDerivative(0) = xyz(1) - xyzLEFT(1); //dn_x/dz_{i, j-1}
-    normalDerivative(1) = xyzLEFT(0) - xyz(0); //dn_y/dz_{i,j-1}
+  if (flag == 1){ //wrt z_{i,j-1} //LEFT
+    normalDerivative(0) = xyzTOP(1) - xyz(1); //dn_x/dz_{i,j-1}
+    normalDerivative(1) = xyz(0) - xyzTOP(0); //dn_y/dz_{i,j-1}
     normalDerivative(2) = 0; //dnz_dz_{i,j-1}
+  }
+  if (flag == 2){ //wrt z_{i-1,j} //TOP
+    normalDerivative(0) = xyz(1) - xyzLEFT(1); //dn_x/dz_{i-1,j}
+    normalDerivative(1) = xyzLEFT(0) - xyz(0); //dn_y/dz_{i-1,j}
+    normalDerivative(2) = 0; //dnz_dz_{i-1,j}
   }
 
   // Ara's Original
@@ -296,8 +299,8 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
       //why did taemin and i make this loop for dummy size?  isn't the image size still blockarea?
       for (k = 0; k < verExtendedSize; ++k){
         for (l = 0; l < horExtendedSize; ++l) {
-          ii = kb*verExtendedSize+k; //row index for the entire image
-          jj = lb*horExtendedSize+l; //col index for the entire image
+          ii = kb*verBlockSize+k; //row index for the entire image
+          jj = lb*horBlockSize+l; //col index for the entire image
           if ((ii < inputImage.rows()) && (jj < inputImage.cols())){
             if ( is_valid(inputImage(jj,ii)) ){
               n++;
@@ -306,10 +309,12 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
         }
       }
 
-      if ( n < AugmentedBlockArea ) {//why is this using augmentedblockarea and not dummyarea?
+      if ( n < ExtendedArea ) {//why is this using augmentedblockarea and not dummyarea?
         printf("kb = %d, lb=%d is skipped, n =%d \n", kb, lb, n);
         continue;
       }
+
+      //std::cout << "n: " << n << endl;
 
       //this looks correct!
       std::cout << "initialization of the jacobian and the error vector" << endl;
@@ -341,7 +346,7 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
             //local index in the vector that describes the block image; assumes row-wise concatenation.
             int l_index = k*horExtendedSize+l; 
 
-            std::cout << "josh & taemin changes" << endl;
+            //std::cout << "josh & taemin changes" << endl;
             if ( is_valid(inputImage(jj,ii)) ) {
               //std::cout << "ii: " << ii << "  jj: " << jj << "  l_index: " << l_index << "  k "<<  k << "  l " << l << endl;
               //std::cout << "rows: " << inputImage.rows() << "  cols: " << inputImage.cols() << endl;
@@ -393,7 +398,7 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
                 //Vector3 normal = computeNormalFrom3DPoints(xyz, xyz_left, xyz_top);
                 // Taemin's modification
                 normalArray[l_index] = cross_prod(xyz_top-xyzArray[l_index], xyz_left-xyzArray[l_index]);
-                // std::cout << "l index: " << l_index << " xyz_top: " << xyz_top << "xyz_left: " << xyz_left << "xyzArray[l_index] " << xyzArray[l_index] << "normalArray: " << normalArray[l_index] << std::endl;
+                //std::cout << "l index: " << l_index << " xyz_top: " << xyz_top << " xyz_left: " << xyz_left << " xyz_current:  " << xyzArray[l_index] << " normalArray: " << normalArray[l_index] << std::endl;
 
                 // moved to stage 2 and stage 3	since reliefArray should be different depending on the image
                 // reliefArray[l_index] = ComputeReflectance(normalize(normalArray[l_index]), xyzArray[l_index], inputImgParams, globalParams);
@@ -421,6 +426,9 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
             Vector2 input_img_pix(jj,ii);
 
             //printf("jj = %d, ii = %d\n", jj, ii);
+              //std::cout << "shadow: " << shadowImage(jj,ii) << endl;
+             // std::cout << "inputImage: " << inputImage(jj,ii) << endl;
+              //std::cin.get();
 
             //update from the main image
             if (is_valid(inputImage(jj,ii)) && (shadowImage(jj, ii) == 0)){
@@ -434,6 +442,7 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
                 weight = 1.0;
                 //printf(".");
               }
+              std::cout << "weight = " << weight << endl;
               //printf("xyz(m) = %f %f %f\n", xyzArray[l_index][0], xyzArray[l_index][1], xyzArray[l_index][2]);
               //printf("xyzLEFT(m) = %f %f %f\n", xyzLEFTArray[l_index][0], xyzLEFTArray[l_index][1], xyzLEFTArray[l_index][2]);
               //printf("xyzTOP(m) = %f %f %f\n", xyzTOPArray[l_index][0], xyzTOPArray[l_index][1], xyzTOPArray[l_index][2]);
@@ -443,6 +452,7 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
               //current
               recDer = ComputeReliefDerivative(xyzArray[l_index], xyzLEFTArray[l_index],xyzTOPArray[l_index], normalArray[l_index], 
                   inputImgParams, 0)*(float)outputImage(jj,ii)*inputImgParams.exposureTime;
+              std::cout << "recDer " << recDer << endl;
 
               jacobianArray[0](l_index, l_index) = recDer*weight;
 
@@ -452,8 +462,11 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
               if(l_index >= horExtendedSize){
                 recDerTOP = ComputeReliefDerivative(xyzArray[l_index], xyzLEFTArray[l_index],
                     xyzTOPArray[l_index], normalArray[l_index], inputImgParams, 2)*(float)outputImage(jj,ii)*inputImgParams.exposureTime;
+              std::cout << "recDerTOP " << recDerTOP << endl;
 
                 jacobianArray[0](l_index, l_index-horExtendedSize) = recDerTOP*weight;
+//std::cout << recDerTOP*weight << endl;
+//std::cin.get();
               }
               //if (l_index > horExtendedSize-1){
               //left
@@ -462,7 +475,8 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
                 recDerLEFT = ComputeReliefDerivative(xyzArray[l_index], xyzLEFTArray[l_index],
                     xyzTOPArray[l_index], normalArray[l_index], 
                     inputImgParams, 1)*(float)outputImage(jj,ii)*inputImgParams.exposureTime;
-                jacobianArray[0](l_index, l_index-1) = recDerLEFT*weight;
+               std::cout << "recDerLEFT " << recDerLEFT << endl;
+               jacobianArray[0](l_index, l_index-1) = recDerLEFT*weight;
               }
               //reliefArray[l_index] = ComputeReflectance(normalize(normalArray[l_index]), xyzArray[l_index], inputImgParams, globalParams);
               reliefVal = ComputeReflectance(normalize(normalArray[l_index]), xyzArray[l_index], inputImgParams, globalParams);
@@ -471,10 +485,12 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
               recErr = ComputeError((float)inputImage(jj, ii), inputImgParams.exposureTime, (float)outputImage(jj, ii), reliefVal);
 
               //std::cout << "intensity error: " << recErr;
-              //std::cin.get();
+              std::cin.get();
 
               //check relief and weight vals
-              //std::cout << "     relief: " << reliefVal << "     weight" << weight << endl;
+             // std::cout << "lb, kb: " << lb << " " << kb << " l, k: " << l << " " << k << endl;
+             // std::cout << "shadow: " << shadowImage(jj,ii) << endl;
+              //std::cout << "inputImage: " << inputImage(jj,ii) << endl;
               //std::cin.get();
 
               errorVectorArray[0](l_index) = recErr*weight;
@@ -493,114 +509,114 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
  
       //compute the jacobian and the error vector for the remaining image
       //#if 0
-//      std::cout << "overlapims " << overlapImgParams.size() << endl; 
-//      for (int m = 0; m < 1 /*(int)overlapImgParams.size()*/; m++){ //debug by just including one overlapping image
-//        DiskImageView<PixelMask<PixelGray<uint8> > >  overlapImg(overlapImgParams[m].inputFilename);
-//        std::cout << "overlapfilename" << overlapImgParams[m].inputFilename << endl;
-//        //std::cin.get();
-//        GeoReference overlapImg_geo;
-//        read_georeference(overlapImg_geo, overlapImgParams[m].inputFilename);
-//        ImageViewRef<PixelMask<PixelGray<uint8> > >  interpOverlapImg = interpolate(edge_extend(overlapImg.impl(),ConstantEdgeExtension()),BilinearInterpolation());
-// 
-//        DiskImageView<PixelMask<PixelGray<uint8> > >  overlapShadowImage(overlapImgParams[m].shadowFilename);
-// 
-//        //this could cause issues if interpolated mask gives us bad results - what is an interpolated mask?
-//        ImageViewRef<PixelMask<PixelGray<uint8> > >  interpOverlapShadowImage = interpolate(edge_extend(overlapShadowImage.impl(),
-//              ConstantEdgeExtension()),
-//            BilinearInterpolation());
-//        int nn = 0;
-// 
-//        for (k = temp; k < verExtendedSize; ++k) {
-//          for (l = temp; l < horExtendedSize; ++l) {
-// 
-//            ii = kb*verBlockSize+k; //row index for the entire image
-//            jj = lb*horBlockSize+l; //col index for the entire image
-// 
-//            if ((ii < inputImage.rows()) && (jj < inputImage.cols())){
-// 
-//              //local index in the vector that describes the block image; assumes row-wise concatenation.
-//              int l_index = k*horExtendedSize+l; 
-//              //std::cout << "ii: " << ii << "jj: " << jj << "l_index: " << l_index << "m " << m << "k "<<  k << "l " << l << endl; 
-//              //std::cin.get();
-//              Vector2 input_img_pix(jj,ii);
-// 
-// 
-//              //update from the overlapping images  
-//              //printf("overlap_img = %s\n", overlapImgParams[m].inputFilename.c_str());
-// 
-//              // moved outside of k and l loop
-//              // DiskImageView<PixelMask<PixelGray<uint8> > >  overlapImg(overlapImgParams[m].inputFilename);
-//              // GeoReference overlapImg_geo;
-//              // read_georeference(overlapImg_geo, overlapImgParams[m].inputFilename);
-//              // ImageViewRef<PixelMask<PixelGray<uint8> > >  interpOverlapImg = interpolate(edge_extend(overlapImg.impl(),ConstantEdgeExtension()),BilinearInterpolation());
-//              //			
-//              // DiskImageView<PixelMask<PixelGray<uint8> > >  overlapShadowImage(overlapImgParams[m].shadowFilename);
-//              // ImageViewRef<PixelMask<PixelGray<uint8> > >  interpOverlapShadowImage = interpolate(edge_extend(overlapShadowImage.impl(),
-//              //   ConstantEdgeExtension()), BilinearInterpolation());
-// 
-//              //determine the corresponding pixel in the overlaping image
-//              Vector2 overlap_pix = overlapImg_geo.lonlat_to_pixel(inputImg_geo.pixel_to_lonlat(input_img_pix));
-//              int x = (int)overlap_pix[0];
-//              int y = (int)overlap_pix[1];
-// 
-//              //compute and update matrix for non shadow pixels
-//              if ((x>=0) && (x < overlapImg.cols()) && (y>=0) && (y< overlapImg.rows())){ //&& (interpOverlapShadowImage(x, y) == 0)){
-//                nn++; 
-//                //}
-//                //if (nn == n){  
-//                float weight;
-//                if (globalParams.useWeights == 1){
-//                  weight = ComputeLineWeights(overlap_pix, overlapImgParams[m].centerLine, overlapImgParams[m].maxDistArray);
-//                  //printf("-");
-//                }else{
-//                  weight = 1.0;
-//                  //printf(".");
-//                }  
-//                // added to account for different reflectance of different images
-// 
-//                //current
-//                recDer = ComputeReliefDerivative(xyzArray[l_index], xyzLEFTArray[l_index],
-//                    xyzTOPArray[l_index], normalArray[l_index], 
-//                    overlapImgParams[m], 0)*(float)outputImage(jj,ii)*overlapImgParams[m].exposureTime;
-//                jacobianArray[m+1](l_index, l_index) = recDer*weight;
-// 
-//                if (l_index >= horExtendedSize){
-//                  //top
-//                  recDerTOP = ComputeReliefDerivative(xyzArray[l_index], xyzLEFTArray[l_index],
-//                      xyzTOPArray[l_index], normalArray[l_index], 
-//                      overlapImgParams[m], 2)*(float)outputImage(jj,ii)*overlapImgParams[m].exposureTime;
-//                  jacobianArray[m+1](l_index, l_index-horExtendedSize) = recDerTOP*weight;
-//                }
-//                if (l_index % horExtendedSize != 0){
-//                  //left
-//                  recDerLEFT = ComputeReliefDerivative(xyzArray[l_index],  xyzLEFTArray[l_index],
-//                      xyzTOPArray[l_index], normalArray[l_index], 
-//                      overlapImgParams[m], 1)*(float)outputImage(jj,ii)*overlapImgParams[m].exposureTime;
-//                  jacobianArray[m+1](l_index, l_index-1) = recDerLEFT*weight; 
-//                }
-//
-//                //reliefArray[l_index] = ComputeReflectance(normalize(normalArray[l_index]), xyzArray[l_index], overlapImgParams[m], globalParams);
-//                reliefVal = ComputeReflectance(normalize(normalArray[l_index]), xyzArray[l_index], overlapImgParams[m], globalParams);
-//
-//                //recErr = ComputeError((float)interpOverlapImg(x, y), overlapImgParams[m].exposureTime, (float)outputImage(jj, ii), reliefArray[l_index]);
-//                recErr = ComputeError((float)interpOverlapImg(x, y), overlapImgParams[m].exposureTime, (float)outputImage(jj, ii), reliefVal);
-//                errorVectorArray[m+1](l_index) = recErr*weight;
-//              }
-//            } 
-//            //printf("recDer3 = %f %f %f recErr = %f, expT = %f\n",  recDer, recDerTOP, recDerLEFT, recErr, inputImgParams.exposureTime);
-//          }//l
-//        }//k
-//      
-//        //print jacobian and error after this to see if they are zero
-//        //std::cout << "Jacob: " << jacobianArray[m+1] << endl;
-//        //std::cout << "Errorvec: " << errorVectorArray[m+1] << endl;
-//
-//        //if (n != nn){
-//        //std::cout << "n = " << n << "     nn = " << nn << "    kb = " << kb << "     lb = " << lb << "     overlapfile = " << overlapImgParams[m].inputFilename << "    m = " << m << endl;
-//        //std::cin.get();
-//        //}
-//      }//m
-//      printf("done stage 3\n");
+      std::cout << "overlapims " << overlapImgParams.size() << endl; 
+      for (int m = 0; m < 1 /*(int)overlapImgParams.size()*/; m++){ //debug by just including one overlapping image
+        DiskImageView<PixelMask<PixelGray<uint8> > >  overlapImg(overlapImgParams[m].inputFilename);
+        std::cout << "overlapfilename" << overlapImgParams[m].inputFilename << endl;
+        //std::cin.get();
+        GeoReference overlapImg_geo;
+        read_georeference(overlapImg_geo, overlapImgParams[m].inputFilename);
+        ImageViewRef<PixelMask<PixelGray<uint8> > >  interpOverlapImg = interpolate(edge_extend(overlapImg.impl(),ConstantEdgeExtension()),BilinearInterpolation());
+ 
+        DiskImageView<PixelMask<PixelGray<uint8> > >  overlapShadowImage(overlapImgParams[m].shadowFilename);
+ 
+        //this could cause issues if interpolated mask gives us bad results - what is an interpolated mask?
+        ImageViewRef<PixelMask<PixelGray<uint8> > >  interpOverlapShadowImage = interpolate(edge_extend(overlapShadowImage.impl(),
+              ConstantEdgeExtension()),
+            BilinearInterpolation());
+        int nn = 0;
+ 
+        for (k = temp; k < verExtendedSize; ++k) {
+          for (l = temp; l < horExtendedSize; ++l) {
+ 
+            ii = kb*verBlockSize+k; //row index for the entire image
+            jj = lb*horBlockSize+l; //col index for the entire image
+ 
+            if ((ii < inputImage.rows()) && (jj < inputImage.cols())){
+ 
+              //local index in the vector that describes the block image; assumes row-wise concatenation.
+              int l_index = k*horExtendedSize+l; 
+              //std::cout << "ii: " << ii << "jj: " << jj << "l_index: " << l_index << "m " << m << "k "<<  k << "l " << l << endl; 
+              //std::cin.get();
+              Vector2 input_img_pix(jj,ii);
+ 
+ 
+              //update from the overlapping images  
+              //printf("overlap_img = %s\n", overlapImgParams[m].inputFilename.c_str());
+ 
+              // moved outside of k and l loop
+              // DiskImageView<PixelMask<PixelGray<uint8> > >  overlapImg(overlapImgParams[m].inputFilename);
+              // GeoReference overlapImg_geo;
+              // read_georeference(overlapImg_geo, overlapImgParams[m].inputFilename);
+              // ImageViewRef<PixelMask<PixelGray<uint8> > >  interpOverlapImg = interpolate(edge_extend(overlapImg.impl(),ConstantEdgeExtension()),BilinearInterpolation());
+              //			
+              // DiskImageView<PixelMask<PixelGray<uint8> > >  overlapShadowImage(overlapImgParams[m].shadowFilename);
+              // ImageViewRef<PixelMask<PixelGray<uint8> > >  interpOverlapShadowImage = interpolate(edge_extend(overlapShadowImage.impl(),
+              //   ConstantEdgeExtension()), BilinearInterpolation());
+ 
+              //determine the corresponding pixel in the overlaping image
+              Vector2 overlap_pix = overlapImg_geo.lonlat_to_pixel(inputImg_geo.pixel_to_lonlat(input_img_pix));
+              int x = (int)overlap_pix[0];
+              int y = (int)overlap_pix[1];
+ 
+              //compute and update matrix for non shadow pixels
+              if ((x>=0) && (x < overlapImg.cols()) && (y>=0) && (y< overlapImg.rows())){ //&& (interpOverlapShadowImage(x, y) == 0)){
+                nn++; 
+                //}
+                //if (nn == n){  
+                float weight;
+                if (globalParams.useWeights == 1){
+                  weight = ComputeLineWeights(overlap_pix, overlapImgParams[m].centerLine, overlapImgParams[m].maxDistArray);
+                  //printf("-");
+                }else{
+                  weight = 1.0;
+                  //printf(".");
+                }  
+                // added to account for different reflectance of different images
+ 
+                //current
+                recDer = ComputeReliefDerivative(xyzArray[l_index], xyzLEFTArray[l_index],
+                    xyzTOPArray[l_index], normalArray[l_index], 
+                    overlapImgParams[m], 0)*(float)outputImage(jj,ii)*overlapImgParams[m].exposureTime;
+                jacobianArray[m+1](l_index, l_index) = recDer*weight;
+ 
+                if (l_index >= horExtendedSize){
+                  //top
+                  recDerTOP = ComputeReliefDerivative(xyzArray[l_index], xyzLEFTArray[l_index],
+                      xyzTOPArray[l_index], normalArray[l_index], 
+                      overlapImgParams[m], 2)*(float)outputImage(jj,ii)*overlapImgParams[m].exposureTime;
+                  jacobianArray[m+1](l_index, l_index-horExtendedSize) = recDerTOP*weight;
+                }
+                if (l_index % horExtendedSize != 0){
+                  //left
+                  recDerLEFT = ComputeReliefDerivative(xyzArray[l_index],  xyzLEFTArray[l_index],
+                      xyzTOPArray[l_index], normalArray[l_index], 
+                      overlapImgParams[m], 1)*(float)outputImage(jj,ii)*overlapImgParams[m].exposureTime;
+                  jacobianArray[m+1](l_index, l_index-1) = recDerLEFT*weight; 
+                }
+
+                //reliefArray[l_index] = ComputeReflectance(normalize(normalArray[l_index]), xyzArray[l_index], overlapImgParams[m], globalParams);
+                reliefVal = ComputeReflectance(normalize(normalArray[l_index]), xyzArray[l_index], overlapImgParams[m], globalParams);
+
+                //recErr = ComputeError((float)interpOverlapImg(x, y), overlapImgParams[m].exposureTime, (float)outputImage(jj, ii), reliefArray[l_index]);
+                recErr = ComputeError((float)interpOverlapImg(x, y), overlapImgParams[m].exposureTime, (float)outputImage(jj, ii), reliefVal);
+                errorVectorArray[m+1](l_index) = recErr*weight;
+              }
+            } 
+            //printf("recDer3 = %f %f %f recErr = %f, expT = %f\n",  recDer, recDerTOP, recDerLEFT, recErr, inputImgParams.exposureTime);
+          }//l
+        }//k
+      
+        //print jacobian and error after this to see if they are zero
+        //std::cout << "Jacob: " << jacobianArray[m+1] << endl;
+        //std::cout << "Errorvec: " << errorVectorArray[m+1] << endl;
+
+        //if (n != nn){
+        //std::cout << "n = " << n << "     nn = " << nn << "    kb = " << kb << "     lb = " << lb << "     overlapfile = " << overlapImgParams[m].inputFilename << "    m = " << m << endl;
+        //std::cin.get();
+        //}
+      }//m
+      printf("done stage 3\n");
 
       //if (n != nn)
       //continue
@@ -636,7 +652,7 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
             //	std::cin.get();
             finalJacobianArray[m](ll_index, ll_index) = jacobianArray[m](l_index, l_index); //current
             if (l_index > 0) finalJacobianArray[m](ll_index, ll_index-1) = jacobianArray[m](l_index, l_index-1); //left
-            if (l_index >= horBlockSize) finalJacobianArray[m](ll_index-horBlockSize, ll_index) = jacobianArray[m](l_index-horExtendedSize, l_index); //top
+            if (l_index >= horBlockSize) finalJacobianArray[m](ll_index, ll_index-horBlockSize) = jacobianArray[m](l_index, l_index-horExtendedSize); //top
             finalErrorVectorArray[m](ll_index) = errorVectorArray[m](l_index);
           } // l
         } // k 
@@ -646,7 +662,7 @@ vw::photometry::UpdateHeightMap(ModelParams inputImgParams, std::vector<ModelPar
       } // m 
 
       //print the jacobian 
-      for (int row = 0; row< BlockArea; row++){
+      for (int row = 0; row< AugmentedBlockArea; row++){
         for (int col = 0; col < BlockArea; col++){ 
           f << finalJacobianArray[0](row, col) << ","; 
         }
